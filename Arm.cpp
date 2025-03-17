@@ -7,7 +7,8 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 
-#include <geometry_msgs/msg/vector3.h>  // Changed from String to Vector3
+// #include <geometry_msgs/msg/vector3.h>  // Changed from String to Vector3
+#include <std_msgs/msg/float32_multi_array.h>
 #include "pid.h"
 #include <ESP32Servo.h>
 // #include <PCF8574.h>
@@ -16,26 +17,25 @@
 
 rcl_publisher_t publisher;
 rcl_subscription_t subscriber;
-geometry_msgs__msg__Vector3 msg;  // Vector3 message type
+// geometry_msgs__msg__Vector3 msg;  // Vector3 message type
+std_msgs__msg__Float32MultiArray msg;
 rclc_executor_t executor;
 rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
 rcl_timer_t timer;
 
-#define LED_PIN 2
-
 hw_timer_t *My_timer = NULL;
 
 //motor1
 const int motor1a =12;
 const int motor1b =14;
-const int motor1V =0;
+const int motor1V =15;
 
 //motor2
 const int motor2a =26;
 const int motor2b =27;
-const int motor2V =0;
+const int motor2V =2;
 //motor3
 const int motor3a =33;
 const int motor3b =25;
@@ -49,20 +49,20 @@ const int motorencode2B = 5;
 const int motorencode3A = 18;
 const int motorencode3B = 19;
 
-const int Hallsensor1 = 0;
-const int Hallsensor2 = 0;
-const int Hallsensor3 = 0;
+const int Hallsensor1 = 32;
+const int Hallsensor2 = 35;
+const int Hallsensor3 = 34;
 
-Servo servo1;  //108
+Servo servo1;  //180
 Servo servo2;  //360
 
-double pos[] = {0,0,0};
-double oldpos[] = {0,0,0};
+double pos[] = {0,0,0,0,0};  //out
+
+double setpoint[] = {0,0,0,0};   //in J1-4
+double Jend = 0.0;  //in end eff
 
 
-double setpoint[] = {0,0,0};
 double U[] = {0,0,0};
-
 PID M1pid(-255,255, 1.2, 0.5,0.0);
 PID M2pid(-255,255, 1.2, 0.5,0.0);
 PID M3pid(-255,255, 1.2, 0.5,0.0);
@@ -108,9 +108,7 @@ void SetZero(){
 
 void error_loop() {
     while(1) {
-        // digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-        analogWrite(LED_PIN,60);
-        delay(50);
+        digitalWrite(2, !digitalRead(2));
     }
 }
 
@@ -119,30 +117,41 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
   if (timer != NULL) {
 
       // publish variable (enc)
-      msg.x = 0;
-      msg.y = 0;
-      msg.z = 0;
-      
+      msg.data.data[0] = pos[0];
+      msg.data.data[1] = pos[1];
+      msg.data.data[2] = pos[2];
+      msg.data.data[3] = pos[3];
+      msg.data.data[4] = pos[4];
       RCSOFTCHECK(rcl_publish(&publisher, &msg, NULL));
   }
 }
 
 
+unsigned long servo2StartTime = 0;
+bool servo2Moving = false;
+int servo2Target = 90;  // Neutral position
+String gripperstate = "";
+
+void checkServo2Timeout() {
+  if (servo2Moving && (millis() - servo2StartTime >= 1000)) {  // 1 second elapsed
+      servo2.write(90);  // Stop the servo
+      servo2Moving = false;
+  }
+}
+
 void subscription_callback(const void *msgin) {  
-  const geometry_msgs__msg__Vector3 *incoming_msg = (const geometry_msgs__msg__Vector3 *)msgin;
+  const std_msgs__msg__Float32MultiArray *incoming_msg = (const std_msgs__msg__Float32MultiArray *)msgin;
   // Process data if needed (e.g., modify and republish)
-  msg.x = incoming_msg->x;
-  msg.y = incoming_msg->y;
-  msg.z = incoming_msg->z;
+  if (incoming_msg->data.size >= 5) {
+    setpoint[0] = incoming_msg->data.data[0];
+    setpoint[1] = incoming_msg->data.data[1];
+    setpoint[2] = incoming_msg->data.data[2];
+    setpoint[3] = incoming_msg->data.data[3];
+    setpoint[4] = incoming_msg->data.data[4];
+}
 
   // Publish to check incomingdata
   // RCSOFTCHECK(rcl_publish(&publisher, &msg, NULL));
-
-
-  //setpoint 
-  setpoint[0] = msg.x;
-  setpoint[1] = msg.y;
-  setpoint[2] = msg.z;
 
 
   U[0] = M1pid.compute(setpoint[0],pos[0]);
@@ -150,6 +159,29 @@ void subscription_callback(const void *msgin) {
   U[2] = M3pid.compute(setpoint[2],pos[2]);
 
   // analog write  here
+  Drive_Motor(motor1a,motor1b,motor1V,U[0]);
+  Drive_Motor(motor2a,motor2b,motor2V,U[1]);
+  Drive_Motor(motor3a,motor3b,motor3V,U[2]);
+
+  servo1.write(setpoint[3]);
+
+
+  if (!servo2Moving) {
+    if (setpoint[4] == 0 and gripperstate == "close") {  // Open
+        servo2Target = 0;
+        servo2Moving = true;
+        gripperstate = "open";
+        servo2StartTime = millis();
+    } else if (setpoint[4] == 1 and gripperstate == "open") {  // Close
+        servo2Target = 180;
+        servo2Moving = true;
+        gripperstate = "close";
+        servo2StartTime = millis();
+    }
+    servo2.write(servo2Target);
+  }
+
+  checkServo2Timeout();
 }
 
 
@@ -157,27 +189,24 @@ void setup() {
   Serial.begin(115200);
   set_microros_serial_transports(Serial);
   
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN,LOW);
-  
   delay(2000);
 
   allocator = rcl_get_default_allocator();
 
   // Initialize message
-  geometry_msgs__msg__Vector3__init(&msg);
+  std_msgs__msg__Float32MultiArray__init(&msg);
 
   // Create init_options
   RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
 
   // Create node
-  RCCHECK(rclc_node_init_default(&node, "wheel_node", "", &support));
+  RCCHECK(rclc_node_init_default(&node, "arm_node", "", &support));
 
   // Create publisher (Vector3)
-  RCCHECK(rclc_publisher_init_default(&publisher,&node,ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3),"enc_vel"));
+  RCCHECK(rclc_publisher_init_default(&publisher,&node,ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),"arm_pos"));
 
   // Create subscriber (Vector3)
-  RCCHECK(rclc_subscription_init_default(&subscriber,&node,ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3),"cnt_vel"));
+  RCCHECK(rclc_subscription_init_default(&subscriber,&node,ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),"cnt_arm"));
 
   // Create timer (publishes every ??? second)
   const unsigned int timer_timeout = 20;
@@ -189,8 +218,8 @@ void setup() {
   RCCHECK(rclc_executor_add_subscription(&executor, &subscriber, &msg, &subscription_callback, ON_NEW_DATA));
 
 
-  servo1.attach(0);
-  servo2.attach(0);
+  servo1.attach(22);
+  servo2.attach(23);
 
   pinMode(motor1a,OUTPUT);
   pinMode(motor1b,OUTPUT);
@@ -225,6 +254,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(motorencode2A),&read_encoder2,RISING);
   attachInterrupt(digitalPinToInterrupt(motorencode3A),&read_encoder3,RISING);
 }
+
 
 void loop() {
   RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(20)));
