@@ -9,6 +9,7 @@
 
 // #include <geometry_msgs/msg/vector3.h>  // Changed from String to Vector3
 #include <std_msgs/msg/float32_multi_array.h>
+#include <geometry_msgs/msg/twist.h>
 #include "pid.h"
 #include <ESP32Servo.h>
 // #include <PCF8574.h>
@@ -18,7 +19,8 @@
 rcl_publisher_t publisher;
 rcl_subscription_t subscriber;
 // geometry_msgs__msg__Vector3 msg;  // Vector3 message type
-std_msgs__msg__Float32MultiArray msg;
+// std_msgs__msg__Float32MultiArray msg;
+geometry_msgs__msg__Twist msg;
 rclc_executor_t executor;
 rclc_support_t support;
 rcl_allocator_t allocator;
@@ -99,6 +101,29 @@ void IRAM_ATTR read_encoder3(){
   if(a>0){pos[2]+=1;}else{pos[2]-=1;}
 }
 
+double joint1_deg_to_pos(double J){
+  J = constrain(J , 0 , 360);
+  double pos = ( J / 360 ) * 5 * 103 * 11 ;
+  return pos ; 
+}
+
+double joint2_deg_to_pos(double J){
+  J = constrain(J , 0 , 270);
+  double pos = ( J / 360 ) * 16 * 103 * 11 ;
+  return pos ; 
+}
+
+double joint3_deg_to_pos(double J){
+  J = constrain(J , 0 , 300);
+  double pos = ( J / 360 ) * 12.25 * 103 * 11 ;
+  return pos ; 
+}
+
+double joint4_deg_to_pos(double J){
+  J = constrain(J , 0 , 180);
+  return J ; 
+}
+
 void SetZero(){
   //motordrive -> HE got activate -> pos[] = 0
 }
@@ -115,13 +140,13 @@ void error_loop() {
 void timer_callback(rcl_timer_t *timer, int64_t last_call_time) {  
   RCLC_UNUSED(last_call_time);
   if (timer != NULL) {
+      msg.linear.x = pos[0];  // Motor 1 Position
+      msg.linear.y = pos[1];  // Motor 2 Position
+      msg.linear.z = pos[2];  // Motor 3 Position
+      msg.angular.x = pos[3]; // Servo1 position
+      msg.angular.y = pos[4]; // Servo2 position (gripper)
+      msg.angular.z = 0.0;    // Not used, set to 0
 
-      // publish variable (enc)
-      msg.data.data[0] = pos[0];
-      msg.data.data[1] = pos[1];
-      msg.data.data[2] = pos[2];
-      msg.data.data[3] = pos[3];
-      msg.data.data[4] = pos[4];
       RCSOFTCHECK(rcl_publish(&publisher, &msg, NULL));
   }
 }
@@ -139,16 +164,19 @@ void checkServo2Timeout() {
   }
 }
 
-void subscription_callback(const void *msgin) {  
-  const std_msgs__msg__Float32MultiArray *incoming_msg = (const std_msgs__msg__Float32MultiArray *)msgin;
+void subscription_callback(const void *msgin) {
+
+  const geometry_msgs__msg__Twist *incoming_msg = (const geometry_msgs__msg__Twist *)msgin;
+
+
   // Process data if needed (e.g., modify and republish)
-  if (incoming_msg->data.size >= 5) {
-    setpoint[0] = incoming_msg->data.data[0];
-    setpoint[1] = incoming_msg->data.data[1];
-    setpoint[2] = incoming_msg->data.data[2];
-    setpoint[3] = incoming_msg->data.data[3];
-    setpoint[4] = incoming_msg->data.data[4];
-}
+
+  setpoint[0] = incoming_msg->linear.x;
+  setpoint[1] = incoming_msg->linear.y;
+  setpoint[2] = incoming_msg->linear.z;
+  setpoint[3] = incoming_msg->angular.x;
+  setpoint[4] = incoming_msg->angular.y;
+
 
   // Publish to check incomingdata
   // RCSOFTCHECK(rcl_publish(&publisher, &msg, NULL));
@@ -194,7 +222,9 @@ void setup() {
   allocator = rcl_get_default_allocator();
 
   // Initialize message
-  std_msgs__msg__Float32MultiArray__init(&msg);
+  // std_msgs__msg__Float32MultiArray__init(&msg);
+  geometry_msgs__msg__Twist__init(&msg);
+  
 
   // Create init_options
   RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
@@ -203,10 +233,10 @@ void setup() {
   RCCHECK(rclc_node_init_default(&node, "arm_node", "", &support));
 
   // Create publisher (Vector3)
-  RCCHECK(rclc_publisher_init_default(&publisher,&node,ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),"arm_pos"));
+  RCCHECK(rclc_publisher_init_default(&publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "arm_pos"));
 
   // Create subscriber (Vector3)
-  RCCHECK(rclc_subscription_init_default(&subscriber,&node,ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),"cnt_arm"));
+  RCCHECK(rclc_subscription_init_default(&subscriber, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "cnt_arm"));
 
   // Create timer (publishes every ??? second)
   const unsigned int timer_timeout = 20;
