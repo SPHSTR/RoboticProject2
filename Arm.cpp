@@ -171,10 +171,10 @@ void subscription_callback(const void *msgin) {
 
   // Process data if needed (e.g., modify and republish)
 
-  setpoint[0] = incoming_msg->linear.x;
-  setpoint[1] = incoming_msg->linear.y;
-  setpoint[2] = incoming_msg->linear.z;
-  setpoint[3] = incoming_msg->angular.x;
+  setpoint[0] = joint1_deg_to_pos(incoming_msg->linear.x);
+  setpoint[1] = joint2_deg_to_pos(incoming_msg->linear.y);
+  setpoint[2] = joint3_deg_to_pos(incoming_msg->linear.z);
+  setpoint[3] = joint4_deg_to_pos(incoming_msg->angular.x);
   setpoint[4] = incoming_msg->angular.y;
 
 
